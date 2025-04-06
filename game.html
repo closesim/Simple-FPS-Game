@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple 3D FPS - v2.1 (Chain Reaction!)</title> {/* Updated Title */}
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #blocker { position: absolute; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; flex-direction: column; }
+        #instructions { width: 80%; max-width: 480px; /* Wider for new format */ font-family: sans-serif; font-size: 15px; /* Smaller base */ text-align: center; color: #fff; padding: 20px; background-color: rgba(0,0,0,0.8); /* Darker */ border-radius: 10px; cursor: pointer; margin-bottom: 10px; line-height: 1.6; /* Increased line spacing */ }
+        #instructions h1 { margin-top: 0; margin-bottom: 15px; font-size: 28px; letter-spacing: 1px; }
+        #instructions p { margin-top: 8px; margin-bottom: 8px; font-weight: bold; font-size: 17px; color: #eee;} /* Section headers */
+        #instructions ul { list-style: none; padding: 0; margin: 5px 0 15px 0; text-align: left; display: inline-block; } /* Centered list items */
+        #instructions li { margin-bottom: 5px; }
+        #instructions hr { border: none; height: 1px; background-color: rgba(255, 255, 255, 0.25); margin: 20px auto; width: 90%; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background-color: white; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; display: none; }
+        #gamepad-status { font-family: sans-serif; font-size: 14px; color: #ccc; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+         <div id="instructions">
+            <h1>Simple FPS - v2.1</h1>
+            <hr>
+            <p>CONTROLS</p>
+            <ul style="list-style: none; padding: 0; margin: 10px 0;">
+                <li><strong>Move:</strong> WASD / Left Stick</li>
+                <li><strong>Look:</strong> MOUSE / Right Stick</li>
+                <li><strong>Shoot:</strong> CLICK / Right Trigger</li>
+            </ul>
+            <hr>
+            <p>GAME INFO</p>
+            <ul style="list-style: none; padding: 0; margin: 10px 0;">
+                <li>Map: 20x20m | Walls: 3m High</li>
+                <li>Player/Enemy: 1.8m High, 0.5m Base</li>
+                <li>Bullets: 5cm Sphere, 15m/s</li>
+                <li>Hit Sound: 80Hz Sine (0.05s)</li>
+                <li>Shoot Sound: 100Hz Square (0.02s)</li>
+                <li>Standard Explosion: 1000 Debris (Force: 8)</li>
+                <li>Super Explosion: 2000 Debris (Force: 20, Upward: 5)</li>
+                <li>Gamepad Vibration Supported</li>
+                <li>Textures: Grass Floor, Wood Walls</li>
+            </ul>
+            <hr>
+            <p>GAMEPLAY</p>
+             <ul style="list-style: none; padding: 0; margin: 10px 0;">
+                <li>Start with <strong>10</strong> enemies (1 m/s).</li>
+                <li>New enemy spawns every 1 second.</li>
+                <li>ALL enemy speeds increase <strong>+0.2 m/s</strong> per spawn!</li>
+                <li><strong>10%</strong> chance of SUPER EXPLOSION on hit.</li>
+                {/* *** NEW: Chain Reaction Info *** */}
+                <li><strong>5%</strong> chance of CHAIN REACTION on hit (all enemies explode)!</li>
+            </ul>
+            <hr>
+            <p style="font-size: 20px; margin-top: 15px; font-weight: normal;">(Click to play)</p>
+        </div>
+         <div id="gamepad-status">Connecting Gamepad...</div>
+    </div>
+    <div id="crosshair"></div>
+    <!-- Import Map -->
+    <script type="importmap"> { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } } </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        let scene, camera, renderer, controls;
+        let clock;
+        let audioContext = null;
+
+        // Constants
+        const mapSize = 20; const playerHeight = 1.8; const playerWidth = 0.5; const enemyHeight = 1.8; const enemyBaseSize = 0.5; const wallHeight = 3.0; const halfMapSize = mapSize / 2; const enemyBound = halfMapSize - enemyBaseSize / 2; const playerSpeed = 5.0; const enemySpeed = 1.0; const bulletSpeed = 15.0; const shootInterval = 0.1; const spawnInterval = 1.0;
+        const debrisCount = 1000; const explosionForce = 8.0; const explosionUpwardForce = 2.0; // Standard Explosion
+        const gravity = new THREE.Vector3(0, -9.81, 0);
+
+        // Game State
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false; let isShooting = false; let timeSinceLastShot = shootInterval; let timeSinceLastSpawn = 0; let currentEnemySpeed = enemySpeed;
+
+        // Procedural Textures (Keep as is)
+        function createGrassTexture() { const canvasSize = 64; const canvas = document.createElement('canvas'); canvas.width = canvasSize; canvas.height = canvasSize; const ctx = canvas.getContext('2d'); const baseLight = 'hsl(110, 60%, 50%)'; const baseDark = 'hsl(100, 50%, 35%)'; const detailColor = 'hsl(80, 40%, 45%)'; for (let y = 0; y < canvasSize; y++) { for (let x = 0; x < canvasSize; x++) { ctx.fillStyle = Math.random() < 0.6 ? baseLight : baseDark; ctx.fillRect(x, y, 1, 1); } } for (let i = 0; i < canvasSize * 5; i++) { const x = Math.random() * canvasSize; const y = Math.random() * canvasSize; const length = Math.random() * 3 + 1; const angle = Math.random() * Math.PI * 2; ctx.strokeStyle = detailColor; ctx.lineWidth = 0.5 + Math.random() * 0.5; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length); ctx.stroke(); } const texture = new THREE.CanvasTexture(canvas); texture.wrapS = THREE.RepeatWrapping; texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(mapSize / 2, mapSize / 2); texture.colorSpace = THREE.SRGBColorSpace; texture.needsUpdate = true; return texture; }
+        function createWoodFenceTexture() { const canvasWidth = 64; const canvasHeight = 128; const canvas = document.createElement('canvas'); canvas.width = canvasWidth; canvas.height = canvasHeight; const ctx = canvas.getContext('2d'); const plankWidthOnCanvas = 16; const numPlanksOnCanvas = canvasWidth / plankWidthOnCanvas; const baseColor = 'hsl(30, 45%, 40%)'; const darkColor = 'hsl(30, 40%, 25%)'; const lightColor = 'hsl(35, 50%, 55%)'; for (let i = 0; i < numPlanksOnCanvas; i++) { const startX = i * plankWidthOnCanvas; ctx.fillStyle = baseColor; ctx.fillRect(startX, 0, plankWidthOnCanvas, canvasHeight); for (let y = 0; y < canvasHeight; y++) { for (let x = startX; x < startX + plankWidthOnCanvas; x++) { const grainNoise = (Math.sin(y * 0.2 + x * 0.05 + i * 0.1) + Math.sin(y * 0.05 + i * 2) * 0.5) * 0.5 + 0.5; let grainColor; if (grainNoise > 0.75) grainColor = lightColor; else if (grainNoise < 0.35) grainColor = darkColor; else { const lerpFactor = (grainNoise - 0.35) / (0.75 - 0.35); const baseLightness = 40; const lightDiff = 15; const currentLightness = baseLightness + (lerpFactor - 0.5) * 2 * lightDiff * (Math.random() * 0.3 + 0.85); grainColor = `hsl(30, 45%, ${Math.max(25, Math.min(55, currentLightness))}%)`; } ctx.fillStyle = grainColor; ctx.fillRect(x, y, 1, 1); } } if (i > 0) { ctx.fillStyle = darkColor; ctx.fillRect(startX - 1, 0, 1, canvasHeight); } } const texture = new THREE.CanvasTexture(canvas); texture.wrapS = THREE.RepeatWrapping; texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace; texture.needsUpdate = true; return texture; }
+
+        // Objects & Materials (Keep as is)
+        const grassTexture = createGrassTexture(); const woodTexture = createWoodFenceTexture(); const floorMaterial = new THREE.MeshStandardMaterial({ map: grassTexture, roughness: 0.8, metalness: 0.1 }); const baseWallMaterial = new THREE.MeshStandardMaterial({ map: woodTexture, roughness: 0.7, metalness: 0.0 }); const enemyMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 }); const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xcccccc }); const debrisMaterial = new THREE.MeshStandardMaterial({ color: 0xcc0000 }); const floor = new THREE.Mesh(new THREE.PlaneGeometry(mapSize, mapSize), floorMaterial); const bulletRadius = 0.025; const bulletGeometry = new THREE.SphereGeometry(bulletRadius, 8, 6); const debrisGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1); const walls = []; const enemies = []; let collidableObjects = []; const bullets = []; const debrisParticles = [];
+
+        // Gamepad Variables (Keep as is)
+        let activeGamepad = null; let gamepadStatusEl = document.getElementById('gamepad-status'); const GAMEPAD_AXIS_THRESHOLD = 0.15; const GAMEPAD_LOOK_SENSITIVITY = 2.0; const GAMEPAD_BUTTON_SHOOT = 7;
+
+        // Helper Vectors (Keep as is)
+        const direction = new THREE.Vector3(); const enemyNextPosition = new THREE.Vector3(); const enemyMoveStep = new THREE.Vector3(); const collisionNormal = new THREE.Vector3(); const reflectionVector = new THREE.Vector3(); const randomDirectionComponent = new THREE.Vector3(); const playerWorldDirection = new THREE.Vector3(); const playerRightVector = new THREE.Vector3(); const worldUpVector = new THREE.Vector3(0, 1, 0); const _euler = new THREE.Euler(0, 0, 0, 'YXZ'); const PI_2 = Math.PI / 2; const blocker = document.getElementById('blocker'); const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair');
+
+        init();
+        animate();
+
+        function init() { // Keep as is
+            clock = new THREE.Clock(); scene = new THREE.Scene(); scene.background = new THREE.Color(0x87ceeb); scene.fog = new THREE.Fog(0x87ceeb, 0, mapSize * 1.5);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100); camera.position.y = playerHeight; camera.position.z = halfMapSize - 1;
+            renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(window.devicePixelRatio); renderer.shadowMap.enabled = true; renderer.outputColorSpace = THREE.SRGBColorSpace; document.body.appendChild(renderer.domElement);
+            controls = new PointerLockControls(camera, renderer.domElement);
+            instructions.addEventListener('click', () => { if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)(); if (audioContext?.state === 'suspended') audioContext.resume().catch(e => console.error("AudioContext resume failed:", e)); controls.lock(); timeSinceLastSpawn = 0; });
+            controls.addEventListener('lock', () => { instructions.style.display = 'none'; blocker.style.display = 'none'; crosshair.style.display = 'block'; moveForward = moveBackward = moveLeft = moveRight = false; });
+            controls.addEventListener('unlock', () => { blocker.style.display = 'flex'; instructions.style.display = ''; crosshair.style.display = 'none'; isShooting = false; gamepadStatusEl.style.display = ''; });
+            scene.add(controls.getObject());
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); scene.add(ambientLight); const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); directionalLight.position.set(mapSize*0.25, mapSize*0.5, mapSize*0.375); directionalLight.castShadow = true; directionalLight.shadow.mapSize.width = 1024; directionalLight.shadow.mapSize.height = 1024; directionalLight.shadow.camera.near = 0.5; directionalLight.shadow.camera.far = mapSize * 3; const shadowCamSize = mapSize * 0.75; directionalLight.shadow.camera.left = -shadowCamSize; directionalLight.shadow.camera.right = shadowCamSize; directionalLight.shadow.camera.top = shadowCamSize; directionalLight.shadow.camera.bottom = -shadowCamSize; scene.add(directionalLight);
+            floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+            const wallThickness = 0.2; const wallPositions = [ { x: 0, z: -halfMapSize, sx: mapSize + wallThickness, sz: wallThickness, normal: new THREE.Vector3(0, 0, 1) }, { x: 0, z: halfMapSize, sx: mapSize + wallThickness, sz: wallThickness, normal: new THREE.Vector3(0, 0, -1) }, { x: -halfMapSize, z: 0, sx: wallThickness, sz: mapSize + wallThickness, normal: new THREE.Vector3(1, 0, 0) }, { x: halfMapSize, z: 0, sx: wallThickness, sz: mapSize + wallThickness, normal: new THREE.Vector3(-1, 0, 0) } ]; const plankWidthOnCanvas = 16; const numPlanksOnCanvas = 64 / plankWidthOnCanvas; const desiredPlankRealWidth = 0.2; const textureTileWidthInMeters = numPlanksOnCanvas * desiredPlankRealWidth;
+            wallPositions.forEach(wp => { const wallLength = Math.max(wp.sx, wp.sz); const repeatX = wallLength / textureTileWidthInMeters; const repeatY = wallHeight / 2; const wallInstanceMaterial = baseWallMaterial.clone(); wallInstanceMaterial.map = woodTexture.clone(); wallInstanceMaterial.map.repeat.set(repeatX, repeatY); wallInstanceMaterial.map.needsUpdate = true; const wall = new THREE.Mesh(new THREE.BoxGeometry(wp.sx, wallHeight, wp.sz), wallInstanceMaterial); wall.position.set(wp.x, wallHeight / 2, wp.z); wall.castShadow = true; wall.receiveShadow = true; wall.userData.normal = wp.normal; wall.userData.collider = new THREE.Box3().setFromObject(wall); scene.add(wall); walls.push(wall); collidableObjects.push(wall); });
+            const numInitialEnemies = 10; for (let i = 0; i < numInitialEnemies; i++) { spawnEnemy(true); }
+            document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp); window.addEventListener('resize', onWindowResize); document.addEventListener('mousedown', onMouseDown); document.addEventListener('mouseup', onMouseUp); window.addEventListener('gamepadconnected', onGamepadConnected); window.addEventListener('gamepaddisconnected', onGamepadDisconnected);
+            scanGamepads(); updateGamepadStatus();
+        }
+
+        // Core Update (Keep as is)
+        function animate() { requestAnimationFrame(animate); const delta = clock.getDelta(); pollGamepadInput(); updateDebris(delta); updateBullets(delta); if (controls.isLocked === true) { updateEnemies(delta); updatePlayerMovementAndLook(delta); timeSinceLastSpawn += delta; if (timeSinceLastSpawn >= spawnInterval) { spawnEnemy(); timeSinceLastSpawn %= spawnInterval; } if (isShooting) { timeSinceLastShot += delta; if (timeSinceLastShot >= shootInterval) { shootBullet(); timeSinceLastShot = 0; } } else { timeSinceLastShot = shootInterval; } } renderer.render(scene, camera); }
+
+        // Spawning (Keep as is)
+        function spawnEnemy(isInitialSpawn = false) { const playerPos = controls.getObject().position; let spawnX, spawnZ, distSq; const minSpawnDistSq = 4*4; do { spawnX = THREE.MathUtils.randFloat(-enemyBound, enemyBound); spawnZ = THREE.MathUtils.randFloat(-enemyBound, enemyBound); distSq = playerPos.distanceToSquared(new THREE.Vector3(spawnX, playerHeight / 2, spawnZ)); } while (distSq < minSpawnDistSq); const enemy = new THREE.Mesh(new THREE.BoxGeometry(enemyBaseSize, enemyHeight, enemyBaseSize), enemyMaterial.clone()); enemy.position.set(spawnX, enemyHeight / 2, spawnZ); enemy.castShadow = true; enemy.receiveShadow = true; const dirX = THREE.MathUtils.randFloatSpread(2); const dirZ = THREE.MathUtils.randFloatSpread(2); enemy.userData.moveDirection = new THREE.Vector3(dirX, 0, dirZ).normalize(); enemy.userData.collider = new THREE.Box3(); updateEnemyCollider(enemy); scene.add(enemy); enemies.push(enemy); collidableObjects.push(enemy); if (!isInitialSpawn) { currentEnemySpeed += 0.2; } }
+
+        // Enemy Update (Keep as is)
+        function updateEnemies(delta) { const playerPos = controls.getObject().position; const playerCol = new THREE.Box3().setFromCenterAndSize( playerPos.clone().setY(playerHeight / 2), new THREE.Vector3(playerWidth, playerHeight, playerWidth) ); for (let i = enemies.length - 1; i >= 0; i--) { const enemy = enemies[i]; if (!enemy.parent) continue; enemyMoveStep.copy(enemy.userData.moveDirection).multiplyScalar(currentEnemySpeed * delta); enemyNextPosition.copy(enemy.position).add(enemyMoveStep); let hitWall = false; let hitPlayer = false; let hitNormal = null; const nextEnemyCollider = enemy.userData.collider.clone().translate(enemyMoveStep); for (const wall of walls) { if (wall.userData.collider && nextEnemyCollider.intersectsBox(wall.userData.collider)) { hitWall = true; hitNormal = wall.userData.normal; break; } } if (!hitWall && nextEnemyCollider.intersectsBox(playerCol)) { hitPlayer = true; hitNormal = enemyNextPosition.clone().sub(playerPos).setY(0).normalize(); } if (hitWall || hitPlayer) { if (hitNormal) { reflectionVector.copy(enemy.userData.moveDirection).reflect(hitNormal); randomDirectionComponent.set(THREE.MathUtils.randFloatSpread(0.5), 0, THREE.MathUtils.randFloatSpread(0.5)).normalize(); enemy.userData.moveDirection.copy(reflectionVector.addScaledVector(randomDirectionComponent, 0.2).normalize()); if (enemy.userData.moveDirection.dot(hitNormal) < 0.1) { enemy.userData.moveDirection.copy(hitNormal).applyAxisAngle(worldUpVector, Math.PI / 2 * (Math.random() > 0.5 ? 1 : -1)); } } else { enemy.userData.moveDirection.negate(); } } else { enemy.position.copy(enemyNextPosition); enemy.position.x = Math.max(-enemyBound, Math.min(enemyBound, enemy.position.x)); enemy.position.z = Math.max(-enemyBound, Math.min(enemyBound, enemy.position.z)); updateEnemyCollider(enemy); } enemy.position.y = enemyHeight / 2; } }
+        function updateEnemyCollider(enemy) { enemy.userData.collider.setFromCenterAndSize( enemy.position, new THREE.Vector3(enemyBaseSize, enemyHeight, enemyBaseSize) ); }
+
+        // Player Update (Keep as is)
+        function updatePlayerMovementAndLook(delta) { let effectiveForward = 0; let effectiveRight = 0; if (activeGamepad) { const axes = activeGamepad.axes; const gpX = Math.abs(axes[0]) > GAMEPAD_AXIS_THRESHOLD ? axes[0] : 0; const gpY = Math.abs(axes[1]) > GAMEPAD_AXIS_THRESHOLD ? axes[1] : 0; effectiveForward = -gpY; effectiveRight = gpX; const lookX = Math.abs(axes[2]) > GAMEPAD_AXIS_THRESHOLD ? axes[2] : 0; const lookY = Math.abs(axes[3]) > GAMEPAD_AXIS_THRESHOLD ? axes[3] : 0; if (Math.abs(lookX) > 0 || Math.abs(lookY) > 0) { const cameraObject = controls.getObject(); _euler.setFromQuaternion(cameraObject.quaternion); _euler.y -= lookX * GAMEPAD_LOOK_SENSITIVITY * delta; _euler.x -= lookY * GAMEPAD_LOOK_SENSITIVITY * delta; _euler.x = Math.max(-PI_2, Math.min(PI_2, _euler.x)); cameraObject.quaternion.setFromEuler(_euler); } const shootButton = activeGamepad.buttons[GAMEPAD_BUTTON_SHOOT]; isShooting = shootButton && shootButton.pressed; } if (moveForward || moveBackward) effectiveForward = Number(moveForward) - Number(moveBackward); if (moveLeft || moveRight) effectiveRight = Number(moveRight) - Number(moveLeft); direction.z = effectiveForward; direction.x = effectiveRight; if (direction.lengthSq() > 0.001) { direction.normalize(); const speed = playerSpeed * delta; const moveDistanceZ = direction.z * speed; const moveDistanceX = direction.x * speed; controls.getObject().getWorldDirection(playerWorldDirection); playerWorldDirection.y = 0; playerWorldDirection.normalize(); playerRightVector.crossVectors(playerWorldDirection, worldUpVector).normalize(); let displacementX = (playerWorldDirection.x * moveDistanceZ) + (playerRightVector.x * moveDistanceX); let displacementZ = (playerWorldDirection.z * moveDistanceZ) + (playerRightVector.z * moveDistanceX); let currentPos = controls.getObject().position; let allowedMoveX = displacementX; let allowedMoveZ = displacementZ; if (checkPlayerCollision(displacementX, 0)) allowedMoveX = 0; if (checkPlayerCollision(allowedMoveX, displacementZ)) allowedMoveZ = 0; controls.getObject().position.x += allowedMoveX; controls.getObject().position.z += allowedMoveZ; } const bound = halfMapSize - playerWidth / 2; controls.getObject().position.x = Math.max(-bound, Math.min(bound, controls.getObject().position.x)); controls.getObject().position.z = Math.max(-bound, Math.min(bound, controls.getObject().position.z)); controls.getObject().position.y = playerHeight; }
+        function checkPlayerCollision(moveX, moveZ) { const playerPos = controls.getObject().position; const nextCenter = new THREE.Vector3(playerPos.x + moveX, playerHeight / 2, playerPos.z + moveZ); const playerCollider = new THREE.Box3().setFromCenterAndSize( nextCenter, new THREE.Vector3(playerWidth, playerHeight, playerWidth) ); for (const obj of collidableObjects) { if (obj?.parent && obj.userData.collider instanceof THREE.Box3) { if (playerCollider.intersectsBox(obj.userData.collider)) return true; } } return false; }
+
+        // --- Bullet Update --- (Chain Reaction Logic Added)
+        function updateBullets(delta) {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                if (!bullet.parent) { bullets.splice(i, 1); continue; }
+                const distance = bulletSpeed * delta;
+                bullet.position.addScaledVector(bullet.userData.direction, distance);
+                const bulletCollider = new THREE.Box3().setFromCenterAndSize( bullet.position, new THREE.Vector3(bulletRadius * 2.2, bulletRadius * 2.2, bulletRadius * 2.2) );
+                let hitDetected = false; // Flag to remove bullet later
+
+                for (let j = enemies.length - 1; j >= 0; j--) { // Iterate backwards for safe removal during hit check
+                    const enemy = enemies[j];
+                    if (!enemy?.parent || !enemy.userData.collider) continue; // Check if enemy is valid
+
+                    if (bulletCollider.intersectsBox(enemy.userData.collider)) {
+                        // --- Enemy Hit Detected ---
+                        playHitSound();
+                        vibrateGamepad(200, 0.5, 0.9);
+                        const enemyPosition = enemy.position.clone(); // Store position of the originally hit enemy
+
+                        // 1. Remove the originally hit enemy
+                        scene.remove(enemy);
+                        const enemyIndexInCollidables = collidableObjects.indexOf(enemy);
+                        if (enemyIndexInCollidables > -1) collidableObjects.splice(enemyIndexInCollidables, 1);
+                        enemies.splice(j, 1); // Remove using current index 'j'
+                        enemy.geometry.dispose();
+                        if (enemy.material instanceof Array) enemy.material.forEach(m => m.dispose());
+                        else enemy.material.dispose();
+
+                        hitDetected = true; // Mark the bullet as used
+
+                        // 2. Check for Chain Reaction (5% chance)
+                        if (Math.random() < 0.05) {
+                             console.log("CHAIN REACTION SUPER EXPLOSION!"); // Optional debug
+                             // Create explosion for the *originally* hit enemy (make it super too)
+                             createExplosion(enemyPosition, 2000, 20, 5);
+
+                             // Now explode ALL *remaining* enemies
+                             for (let k = enemies.length - 1; k >= 0; k--) { // Iterate backwards over remaining enemies
+                                 const chainEnemy = enemies[k];
+                                 if (!chainEnemy || !chainEnemy.parent) continue; // Safety check
+
+                                 const chainEnemyPosition = chainEnemy.position.clone();
+                                 createExplosion(chainEnemyPosition, 2000, 20, 5); // Super explosion
+
+                                 // Remove this chain-reacted enemy
+                                 scene.remove(chainEnemy);
+                                 const chainEnemyIndexInCollidables = collidableObjects.indexOf(chainEnemy);
+                                 if (chainEnemyIndexInCollidables > -1) collidableObjects.splice(chainEnemyIndexInCollidables, 1);
+                                 enemies.splice(k, 1); // Remove using current index 'k'
+                                 chainEnemy.geometry.dispose();
+                                 if (chainEnemy.material instanceof Array) chainEnemy.material.forEach(m => m.dispose());
+                                 else chainEnemy.material.dispose();
+                             }
+                        } else {
+                             // 3. No Chain Reaction - Handle single enemy explosion (10% super chance)
+                            if (Math.random() < 0.1) { // 10% chance for single super
+                                // console.log("SINGLE SUPER EXPLOSION!");
+                                createExplosion(enemyPosition, 2000, 20, 5);
+                            } else {
+                                // Standard explosion for the single hit enemy
+                                createExplosion(enemyPosition, debrisCount, explosionForce, explosionUpwardForce);
+                            }
+                        }
+
+                        break; // Bullet processes max one hit (or triggers chain reaction)
+                    }
+                } // End enemy iteration loop
+
+                // 4. Remove bullet if it hit something or went out of bounds
+                if (hitDetected) {
+                    scene.remove(bullet);
+                    bullet.geometry.dispose(); bullet.material.dispose();
+                    bullets.splice(i, 1);
+                    continue; // Move to the next bullet
+                }
+
+                // Check wall hits if no enemy was hit
+                for (const wall of walls) {
+                    if (wall.userData.collider && bulletCollider.intersectsBox(wall.userData.collider)) {
+                        hitDetected = true; break;
+                    }
+                }
+                const boundCheck = mapSize / 2 + 1;
+                if (hitDetected || Math.abs(bullet.position.x) > boundCheck || Math.abs(bullet.position.z) > boundCheck || bullet.position.y < -1 || bullet.position.y > wallHeight + 1) {
+                    scene.remove(bullet); bullet.geometry.dispose(); bullet.material.dispose(); bullets.splice(i, 1);
+                }
+            } // End bullet iteration loop
+        }
+
+
+        // Debris Update (Keep as is)
+        function updateDebris(delta) { const worldBoundary = mapSize / 2 + 2; for (let i = debrisParticles.length - 1; i >= 0; i--) { const particle = debrisParticles[i]; particle.velocity.addScaledVector(gravity, delta); particle.mesh.position.addScaledVector(particle.velocity, delta); if (particle.mesh.position.y < 0.05 || Math.abs(particle.mesh.position.x) > worldBoundary || Math.abs(particle.mesh.position.z) > worldBoundary) { scene.remove(particle.mesh); particle.mesh.geometry.dispose(); if (particle.mesh.material instanceof Array) particle.mesh.material.forEach(m => m.dispose()); else particle.mesh.material.dispose(); debrisParticles.splice(i, 1); } } }
+
+        // Event Handlers (Keep as is)
+        function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+        function onKeyDown(event) { switch (event.code) { case 'KeyW': case 'ArrowUp': moveForward = true; break; case 'KeyA': case 'ArrowLeft': moveLeft = true; break; case 'KeyS': case 'ArrowDown': moveBackward = true; break; case 'KeyD': case 'ArrowRight': moveRight = true; break; } }
+        function onKeyUp(event) { switch (event.code) { case 'KeyW': case 'ArrowUp': moveForward = false; break; case 'KeyA': case 'ArrowLeft': moveLeft = false; break; case 'KeyS': case 'ArrowDown': moveBackward = false; break; case 'KeyD': case 'ArrowRight': moveRight = false; break; } }
+        function onMouseDown(event) { if (controls.isLocked === true && event.button === 0) isShooting = true; }
+        function onMouseUp(event) { if (event.button === 0) isShooting = false; }
+
+        // Sound Effects (Keep as is)
+        function playHitSound() { if (!audioContext || audioContext.state !== 'running') return; const osc = audioContext.createOscillator(); const gain = audioContext.createGain(); const hitFrequency = 80; const hitDuration = 0.05; const now = audioContext.currentTime; osc.type = 'sine'; osc.frequency.setValueAtTime(hitFrequency, now); osc.connect(gain); gain.connect(audioContext.destination); gain.gain.setValueAtTime(0.5, now); gain.gain.linearRampToValueAtTime(0.0001, now + hitDuration); osc.start(now); osc.stop(now + hitDuration); }
+        function playShootSound() { if (!audioContext || audioContext.state !== 'running') return; const osc = audioContext.createOscillator(); const gain = audioContext.createGain(); const shootFrequency = 100; const shootDuration = 0.02; const now = audioContext.currentTime; osc.type = 'square'; osc.frequency.setValueAtTime(shootFrequency, now); osc.connect(gain); gain.connect(audioContext.destination); gain.gain.setValueAtTime(0.3, now); gain.gain.linearRampToValueAtTime(0.0001, now + shootDuration); osc.start(now); osc.stop(now + shootDuration); }
+
+        // Shooting (Keep as is)
+        function shootBullet() { if (!controls.isLocked) { isShooting = false; return; } const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial); const playerPosition = controls.getObject().position; const direction = new THREE.Vector3(); camera.getWorldDirection(direction); bullet.position.copy(playerPosition).addScaledVector(direction, playerWidth * 0.6); bullet.userData.direction = direction.clone(); scene.add(bullet); bullets.push(bullet); playShootSound(); vibrateGamepad(30, 0.6, 0.2); }
+
+        // Explosion (Keep as is - Parameters are used now)
+        function createExplosion(position, count, force, upwardForce) { for (let i = 0; i < count; i++) { const mesh = new THREE.Mesh(debrisGeometry, debrisMaterial.clone()); mesh.position.copy(position); const velocity = new THREE.Vector3( THREE.MathUtils.randFloatSpread(1), THREE.MathUtils.randFloatSpread(1), THREE.MathUtils.randFloatSpread(1) ).normalize().multiplyScalar( THREE.MathUtils.randFloat(force * 0.5, force * 1.5) ); velocity.y += THREE.MathUtils.randFloat(0, upwardForce); mesh.castShadow = true; scene.add(mesh); debrisParticles.push({ mesh: mesh, velocity: velocity }); } }
+
+        // Gamepad (Keep as is)
+        function onGamepadConnected(event) { console.log('Gamepad connected:', event.gamepad.id); if (!activeGamepad) activeGamepad = event.gamepad; updateGamepadStatus(); }
+        function onGamepadDisconnected(event) { console.log('Gamepad disconnected:', event.gamepad.id); if (activeGamepad?.index === event.gamepad.index) { activeGamepad = null; scanGamepads(); } updateGamepadStatus(); }
+        function scanGamepads() { try { const gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads : []); activeGamepad = null; for (const gp of gamepads) { if (gp) { activeGamepad = gp; console.log('Found active gamepad:', gp.id); break; } } } catch (e) { console.error("Error scanning gamepads:", e); activeGamepad = null; } }
+        function pollGamepadInput() { if (!activeGamepad) return; try { const gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads : []); if (!gamepads) { activeGamepad = null; updateGamepadStatus(); return; } const updatedGamepad = gamepads[activeGamepad.index]; if (updatedGamepad) activeGamepad = updatedGamepad; else { console.warn("Active gamepad lost connection (poll)."); activeGamepad = null; updateGamepadStatus(); scanGamepads(); } } catch (e) { console.error("Error polling gamepad:", e); activeGamepad = null; updateGamepadStatus(); } }
+        function updateGamepadStatus() { if (activeGamepad) { gamepadStatusEl.textContent = `Gamepad: ${activeGamepad.id}`; gamepadStatusEl.style.color = '#9f9'; } else { gamepadStatusEl.textContent = 'No Gamepad Detected'; gamepadStatusEl.style.color = '#f99'; } }
+        function vibrateGamepad(duration = 100, weakMag = 0.5, strongMag = 0.5) { if (activeGamepad?.vibrationActuator?.playEffect) { activeGamepad.vibrationActuator.playEffect('dual-rumble', { startDelay: 0, duration: duration, weakMagnitude: weakMag, strongMagnitude: strongMag }).catch(err => {}); } }
+
+    </script>
+</body>
+</html>
